@@ -1,41 +1,40 @@
 import numpy
 import scipy.io as spio
-from scipy.signal import medfilt, cheby2, sosfilt
+from scipy.signal import medfilt, cheby2, filtfilt
 import matplotlib.pyplot as plt
 
 
-def bandpass_filter(signal):
+def bandpass_filter(signal, lowcut=0.1, highcut=10.0):
     fs = 125
     fn = fs * 0.5
-    lowcut = 0.1
-    highcut = 10
-    sos = cheby2(4, 20, [lowcut / fn, highcut / fn], 'bandpass', output='sos')
-    y = sosfilt(sos, signal)
-
+    b, a = cheby2(4, 20, [lowcut / fn, highcut / fn], 'bandpass')
+    y = filtfilt(b, a, signal)
     return y
 
 
 def training_data():
     # loading mat file
-    data = loadmat('bidmc_data.mat')['data']
+    data = load_mat('data/bidmc_data.mat')['data']
 
+    data_len = 4096
     # Reading ppg data from mat file
-    ppg = numpy.zeros(shape=(53, 4000))
+    ppg = numpy.zeros(shape=(53, data_len))
+    resp_sig = numpy.zeros(shape=(53, data_len))
     respiration_rate = numpy.zeros(shape=(53, 1))
-    ppg_breath_points = numpy.zeros(shape=(53, 4000))
-    i = 0
-    for row in data:
+    ppg_breath_points = numpy.zeros(shape=(53, data_len))
+
+    for index, row in numpy.ndenumerate(data):
+        respiration_rate[index] = row.ref.params.rr.v.mean()
+
+    for index, row in numpy.ndenumerate(data):
         ppg_row = medfilt(row.ppg.v, kernel_size=5)
         # Discarding the first 500 rows to omit the spike due to filter
-        ppg[i] = bandpass_filter(ppg_row)[500:4500]
-        ppg[i] = numpy.interp(ppg[i], (ppg[i].min(), ppg[i].max()), (0, 0.1))
-        plt.plot(ppg[i])
-        i += 1
+        ppg[index] = bandpass_filter(ppg_row)[0:data_len]
+        ppg[index] = numpy.power(ppg[index], 2)
+        ppg[index] = numpy.interp(ppg[index], (ppg[index].min(), ppg[index].max()), (0, 1))
 
-    i = 0
-    for row in data:
-        respiration_rate[i] = row.ref.params.rr.v.mean()
-        i += 1
+        resp_sig[index] = row.ref.resp_sig.imp.v[0:data_len]
+        resp_sig[index] = numpy.interp(resp_sig[index], (resp_sig[index].min(), resp_sig[index].max()), (0, 1))
 
     # Reading breathing data from mat file
     i = 0
@@ -48,24 +47,25 @@ def training_data():
         ann2 = ann2[:min_size]
 
         # Marking the points in PPG at which the person inhaled
-        breaths = numpy.mean([ann1, ann2], axis=0)[:50]
-        # collecting the breathing points between 500 and 4500
+        breaths = numpy.mean([ann1, ann2], axis=0)[:40]
+        # collecting the breathing points between 0 and data_len
         for col in breaths:
-            if col > 4500:
+            if col > data_len:
                 break
-            if col > 500:
-                ppg_breath_points[i, numpy.int(col - 500)] = 1
+            ppg_breath_points[i, numpy.int(col)] = 1
+
         i += 1
-    return ppg, respiration_rate, ppg_breath_points
+    return ppg, respiration_rate, ppg_breath_points, resp_sig
 
 
-def loadmat(filename):
+def load_mat(filename):
     '''
     this function should be called instead of direct spio.loadmat
     as it cures the problem of not properly recovering python dictionaries
     from mat files. It calls the function check keys to cure all entries
     which are still mat-objects
     '''
+
     def _check_keys(d):
         '''
         checks if entries in dictionary are mat-objects. If yes
@@ -106,5 +106,18 @@ def loadmat(filename):
             else:
                 elem_list.append(sub_elem)
         return elem_list
+
     data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
     return _check_keys(data)
+
+# n = len(ppg[i])  # length of the signal
+# k = numpy.arange(n)
+# T = n / 125
+# frq = k / T  # two sides frequency range
+# frq = frq[:len(frq) // 2]  # one side frequency range
+#
+# Y = numpy.fft.fft(ppg[i]) / n  # dft and normalization
+# Y = Y[:n // 2]
+# plt.plot(frq, abs(Y))
+# plt.xlabel('Freq (Hz)')
+# plt.ylabel('|Y(freq)|')
