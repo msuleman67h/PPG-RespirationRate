@@ -1,85 +1,109 @@
+import os
+
+import mat73
 import numpy
 import scipy.io as spio
-from scipy.signal import medfilt, cheby2, filtfilt
+import scipy.signal
 import matplotlib.pyplot as plt
 
-
-def bandpass_filter(signal, lowcut=0.1, highcut=10.0):
-    fs = 125
-    fn = fs * 0.5
-    b, a = cheby2(4, 20, [lowcut / fn, highcut / fn], 'bandpass')
-    y = filtfilt(b, a, signal)
-    return y
+import bio_signals
 
 
 def training_data():
-    # loading mat file
-    data = load_mat('data/bidmc_data.mat')['data']
+    # loading bidmc dataset
+    data = load_mat('data/bidmc/bidmc_data.mat')['data']
 
-    data_len = 4096
+    data_len = 7500
     # Reading ppg data from mat file
-    ppg = numpy.zeros(shape=(53, data_len))
-    resp_sig = numpy.zeros(shape=(53, data_len))
-    respiration_rate = numpy.zeros(shape=(53, 1))
-    ppg_breath_points = numpy.zeros(shape=(53, data_len))
+    training_dataset = []
 
-    for index, row in numpy.ndenumerate(data):
-        respiration_rate[index] = row.ref.params.rr.v.mean()
-
-    for index, row in numpy.ndenumerate(data):
-        ppg_row = medfilt(row.ppg.v, kernel_size=5)
-        # Discarding the first 500 rows to omit the spike due to filter
-        ppg[index] = bandpass_filter(ppg_row)[0:data_len]
-        ppg[index] = numpy.power(ppg[index], 2)
-        ppg[index] = numpy.interp(ppg[index], (ppg[index].min(), ppg[index].max()), (0, 1))
-
-        resp_sig[index] = row.ref.resp_sig.imp.v[0:data_len]
-        resp_sig[index] = numpy.interp(resp_sig[index], (resp_sig[index].min(), resp_sig[index].max()), (0, 1))
-
-    # Reading breathing data from mat file
-    i = 0
     for row in data:
+        bio = bio_signals.BiomedicalSignals()
+
+        bio.set_resp_rate(row.ref.params.rr.v[:480].reshape(60, -1).mean(axis=0))
+        bio.set_ppg(row.ppg.v)
+        bio.set_resp_signal(row.ref.resp_sig.imp.v)
+
+        # Getting Resp annotated points
         # Making sure both the breathing annotations are of same size
         ann1 = row.ref.breaths.ann1
         ann2 = row.ref.breaths.ann2
         min_size = min(numpy.size(ann1), numpy.size(ann2))
         ann1 = ann1[:min_size]
         ann2 = ann2[:min_size]
+        bio.set_breathing_annotation(numpy.stack((ann1, ann2)).mean(axis=0).astype(numpy.int))
 
-        # Marking the points in PPG at which the person inhaled
-        breaths = numpy.mean([ann1, ann2], axis=0)[:40]
-        # collecting the breathing points between 0 and data_len
-        for col in breaths:
-            if col > data_len:
-                break
-            ppg_breath_points[i, numpy.int(col)] = 1
+        training_dataset.append(bio)
 
-        i += 1
-    return ppg, respiration_rate, ppg_breath_points, resp_sig
+    capno_base_data = []
+    for file in os.listdir("data/capnobase"):
+        if file.endswith(".mat"):
+            data_dict = mat73.loadmat(f"data/capnobase/{file}")
+            capno_base_data.append(data_dict)
+
+            bio = bio_signals.BiomedicalSignals()
+            time_axis = data_dict['reference']['rr']['co2']['x']
+            breathing_rate = data_dict['reference']['rr']['co2']['y']
+            minute = 1
+            instant_resp_rate = 0
+            resp_rates = []
+            prev_index = 0
+            for index, value in numpy.ndenumerate(time_axis):
+                if value >= minute * 60:
+                    instant_resp_rate = instant_resp_rate / (index[0] + 1 - prev_index)
+                    prev_index = index[0]
+                    minute += 1
+                    resp_rates.append(instant_resp_rate)
+                    instant_resp_rate = breathing_rate[index]
+                else:
+                    instant_resp_rate += breathing_rate[index]
+
+            bio.set_resp_rate(numpy.asarray(resp_rates))
+            bio.set_ppg(scipy.signal.resample(data_dict['signal']['pleth']['y'], 60001))
+            bio.set_resp_signal(scipy.signal.resample(data_dict['signal']['co2']['y'], 60001))
+
+            ann1 = data_dict['labels']['co2']['startexp']['x']
+            ann2 = data_dict['labels']['co2']['startinsp']['x']
+            min_size = min(numpy.size(ann1), numpy.size(ann2))
+            ann1 = ann1[:min_size]
+            ann2 = ann2[:min_size]
+
+            z = numpy.stack((ann1, ann2)).mean(axis=0)
+            z = (z / 300) * 125
+            bio.set_breathing_annotation(z.astype(numpy.int))
+            # plt.plot(scipy.signal.resample(data_dict['signal']['co2']['y'], 60001)[0:5000])
+            # plt.plot(bio.breathing_annotation[0:5000].cpu().detach().numpy())
+            # plt.plot(bio.ppg_low_f[0:5000].cpu().detach().numpy())
+            # plt.plot(bio.raw_ppg[0:5000].cpu().detach().numpy())
+            # plt.show()
+            # plt.clf()
+
+            training_dataset.append(bio)
+    return training_dataset
 
 
 def load_mat(filename):
-    '''
+    """
     this function should be called instead of direct spio.loadmat
     as it cures the problem of not properly recovering python dictionaries
     from mat files. It calls the function check keys to cure all entries
     which are still mat-objects
-    '''
+    """
 
     def _check_keys(d):
-        '''
+        """
         checks if entries in dictionary are mat-objects. If yes
         todict is called to change them to nested dictionaries
-        '''
+        """
         for key in d:
             if isinstance(d[key], spio.matlab.mio5_params.mat_struct):
                 d[key] = _todict(d[key])
         return d
 
     def _todict(matobj):
-        '''
+        """
         A recursive function which constructs from matobjects nested dictionaries
-        '''
+        """
         d = {}
         for strg in matobj._fieldnames:
             elem = matobj.__dict__[strg]
@@ -92,11 +116,11 @@ def load_mat(filename):
         return d
 
     def _tolist(ndarray):
-        '''
+        """
         A recursive function which constructs lists from cellarrays
         (which are loaded as numpy ndarrays), recursing into the elements
         if they contain matobjects.
-        '''
+        """
         elem_list = []
         for sub_elem in ndarray:
             if isinstance(sub_elem, spio.matlab.mio5_params.mat_struct):
@@ -110,13 +134,15 @@ def load_mat(filename):
     data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
     return _check_keys(data)
 
-# n = len(ppg[i])  # length of the signal
+
+# For fourier analysis
+# n = 5000  # length of the signal
 # k = numpy.arange(n)
 # T = n / 125
 # frq = k / T  # two sides frequency range
 # frq = frq[:len(frq) // 2]  # one side frequency range
 #
-# Y = numpy.fft.fft(ppg[i]) / n  # dft and normalization
+# Y = numpy.fft.fft(bio.raw_ppg[0:5000].cpu().detach().numpy()) / n  # dft and normalization
 # Y = Y[:n // 2]
 # plt.plot(frq, abs(Y))
 # plt.xlabel('Freq (Hz)')
