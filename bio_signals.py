@@ -25,7 +25,7 @@ class BiomedicalSignals:
         y = filtfilt(b, a, signal)
         return y
 
-    def __init__(self, sampling_rate):
+    def __init__(self, sampling_rate, kernel_size):
         self.raw_ppg = torch.empty(0)
         self.filtered_ppg = torch.empty(0)
         self.extracted_resp_sig = torch.empty(0)
@@ -33,6 +33,7 @@ class BiomedicalSignals:
         self.respiration_rate = torch.empty(0)
         self.breathing_annotation = torch.empty(0)
         self.sampling_rate = sampling_rate
+        self.kernel_size = kernel_size
         self.data_len = sampling_rate * 8 * 60 + 1
 
     def set_ppg(self, ppg: numpy.ndarray):
@@ -44,7 +45,7 @@ class BiomedicalSignals:
             numpy.interp(ppg, (numpy.min(ppg), numpy.max(ppg)), (-10, 10))).float().to(BiomedicalSignals.device)
 
         ext_resp_sig = BiomedicalSignals.cheby2_lowpass_filter(ppg, cutoff=1, fs=self.sampling_rate)
-        ext_resp_sig = medfilt(ext_resp_sig, kernel_size=499)
+        ext_resp_sig = medfilt(ext_resp_sig, kernel_size=self.kernel_size)
         ext_resp_sig = uniform_filter1d(ext_resp_sig, size=50)
         ext_resp_sig = numpy.interp(ext_resp_sig, (numpy.min(ext_resp_sig), numpy.max(ext_resp_sig)), (-10, 10)) * -1
         self.extracted_resp_sig = torch.from_numpy(ext_resp_sig).float().to(BiomedicalSignals.device)

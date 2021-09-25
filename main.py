@@ -243,7 +243,7 @@ def fourier_transform_ppg(training_dataset):
     Performs Fourier Transform on pgg and plots them using matplotlib
 
     Works on BIDMC only for now
-    
+
     :param training_dataset: PPG dataset loaded from files
     """
     for bio_signal in training_dataset:
@@ -279,7 +279,7 @@ def main():
     # identify_peaks(training_dataset)
 
     training_dataset = ppg_dataset.training_data()
-    random_sample(training_dataset, 2)
+    algorithim_evaluation(training_dataset)
 
 
 if __name__ == '__main__':
