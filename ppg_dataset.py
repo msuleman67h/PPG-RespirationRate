@@ -13,35 +13,33 @@ def training_data():
     # loading bidmc dataset
     data = load_mat('data/bidmc/bidmc_data.mat')['data']
 
-    data_len = 7500
-    # Reading ppg data from mat file
     training_dataset = []
 
-    for row in data:
-        bio = bio_signals.BiomedicalSignals()
+    # for row in data:
+    #     bio = bio_signals.BiomedicalSignals(sampling_rate=125)
+    #
+    #     bio.set_resp_rate(row.ref.params.rr.v[:480].reshape(60, -1).mean(axis=0))
+    #     bio.set_ppg(row.ppg.v)
+    #     bio.set_resp_signal(row.ref.resp_sig.imp.v)
+    #
+    #     # Getting Resp annotated points
+    #     # Making sure both the breathing annotations are of same size
+    #     ann1 = row.ref.breaths.ann1
+    #     ann2 = row.ref.breaths.ann2
+    #     min_size = min(numpy.size(ann1), numpy.size(ann2))
+    #     ann1 = ann1[:min_size]
+    #     ann2 = ann2[:min_size]
+    #     bio.set_breathing_annotation(numpy.stack((ann1, ann2)).mean(axis=0).astype(numpy.int))
+    #     training_dataset.append(bio)
 
-        bio.set_resp_rate(row.ref.params.rr.v[:480].reshape(60, -1).mean(axis=0))
-        bio.set_ppg(row.ppg.v)
-        bio.set_resp_signal(row.ref.resp_sig.imp.v)
-
-        # Getting Resp annotated points
-        # Making sure both the breathing annotations are of same size
-        ann1 = row.ref.breaths.ann1
-        ann2 = row.ref.breaths.ann2
-        min_size = min(numpy.size(ann1), numpy.size(ann2))
-        ann1 = ann1[:min_size]
-        ann2 = ann2[:min_size]
-        bio.set_breathing_annotation(numpy.stack((ann1, ann2)).mean(axis=0).astype(numpy.int))
-
-        training_dataset.append(bio)
-
+    # loading capnobase dataset
     capno_base_data = []
     for file in os.listdir("data/capnobase"):
         if file.endswith(".mat"):
             data_dict = mat73.loadmat(f"data/capnobase/{file}")
             capno_base_data.append(data_dict)
 
-            bio = bio_signals.BiomedicalSignals()
+            bio = bio_signals.BiomedicalSignals(sampling_rate=300)
             time_axis = data_dict['reference']['rr']['co2']['x']
             breathing_rate = data_dict['reference']['rr']['co2']['y']
             minute = 1
@@ -59,8 +57,8 @@ def training_data():
                     instant_resp_rate += breathing_rate[index]
 
             bio.set_resp_rate(numpy.asarray(resp_rates))
-            bio.set_ppg(scipy.signal.resample(data_dict['signal']['pleth']['y'], 60001))
-            bio.set_resp_signal(scipy.signal.resample(data_dict['signal']['co2']['y'], 60001))
+            bio.set_ppg(data_dict['signal']['pleth']['y'])
+            bio.set_resp_signal(data_dict['signal']['co2']['y'])
 
             ann1 = data_dict['labels']['co2']['startexp']['x']
             ann2 = data_dict['labels']['co2']['startinsp']['x']
@@ -69,16 +67,9 @@ def training_data():
             ann2 = ann2[:min_size]
 
             z = numpy.stack((ann1, ann2)).mean(axis=0)
-            z = (z / 300) * 125
             bio.set_breathing_annotation(z.astype(numpy.int))
-            # plt.plot(scipy.signal.resample(data_dict['signal']['co2']['y'], 60001)[0:5000])
-            # plt.plot(bio.breathing_annotation[0:5000].cpu().detach().numpy())
-            # plt.plot(bio.ppg_low_f[0:5000].cpu().detach().numpy())
-            # plt.plot(bio.raw_ppg[0:5000].cpu().detach().numpy())
-            # plt.show()
-            # plt.clf()
-
             training_dataset.append(bio)
+
     return training_dataset
 
 
@@ -133,17 +124,3 @@ def load_mat(filename):
 
     data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
     return _check_keys(data)
-
-
-# For fourier analysis
-# n = 5000  # length of the signal
-# k = numpy.arange(n)
-# T = n / 125
-# frq = k / T  # two sides frequency range
-# frq = frq[:len(frq) // 2]  # one side frequency range
-#
-# Y = numpy.fft.fft(bio.raw_ppg[0:5000].cpu().detach().numpy()) / n  # dft and normalization
-# Y = Y[:n // 2]
-# plt.plot(frq, abs(Y))
-# plt.xlabel('Freq (Hz)')
-# plt.ylabel('|Y(freq)|')
